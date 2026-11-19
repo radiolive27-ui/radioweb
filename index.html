@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tiempo TV</title>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            color: #fff;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        #app {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            background: #000;
+            outline: none;
+        }
+
+        /* Pantalla de carga */
+        #loading {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+            z-index: 100;
+            transition: opacity 0.5s;
+        }
+
+        #loading.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .spinner {
+            width: 80px;
+            height: 80px;
+            border: 6px solid rgba(255,255,255,0.15);
+            border-top-color: #00aaff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 24px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        #loading p {
+            font-size: 22px;
+            color: #ccc;
+        }
+
+        /* Overlay de controles */
+        #controls {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            z-index: 50;
+            background: linear-gradient(
+                to bottom,
+                rgba(0,0,0,0.7) 0%,
+                rgba(0,0,0,0) 25%,
+                rgba(0,0,0,0) 75%,
+                rgba(0,0,0,0.7) 100%
+            );
+            opacity: 0;
+            transition: opacity 0.35s ease;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 40px 60px;
+            pointer-events: none;
+        }
+
+        #controls.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .top-bar {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+
+        .live-badge {
+            background: #e50914;
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 18px;
+            letter-spacing: 1px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .live-badge .dot {
+            width: 12px;
+            height: 12px;
+            background: #fff;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        .title {
+            font-size: 32px;
+            font-weight: 600;
+            text-shadow: 2px 2px 8px rgba(0,0,0,0.9);
+        }
+
+        .bottom-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 30px;
+            pointer-events: auto;
+        }
+
+        .btn {
+            background: rgba(255,255,255,0.15);
+            border: 3px solid transparent;
+            color: #fff;
+            padding: 14px 28px;
+            border-radius: 50px;
+            font-size: 20px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            transition: all 0.2s;
+            outline: none;
+        }
+
+        .btn:hover, .btn:focus {
+            background: #00aaff;
+            border-color: #fff;
+            transform: scale(1.05);
+        }
+
+        .btn svg {
+            width: 28px;
+            height: 28px;
+            fill: currentColor;
+        }
+
+        /* Mensaje de error */
+        #error {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(180, 0, 0, 0.9);
+            padding: 40px 60px;
+            border-radius: 12px;
+            font-size: 24px;
+            text-align: center;
+            z-index: 200;
+            display: none;
+            max-width: 80%;
+        }
+
+        #error.visible {
+            display: block;
+        }
+
+        /* Indicador de info */
+        .info-badge {
+            font-size: 16px;
+            color: #aaa;
+            text-align: center;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <video id="video" playsinline webkit-playsinline autoplay></video>
+
+        <!-- Pantalla de carga -->
+        <div id="loading">
+            <div class="spinner"></div>
+            <p>Cargando transmisión...</p>
+        </div>
+
+        <!-- Overlay de controles -->
+        <div id="controls">
+            <div class="top-bar">
+                <div class="live-badge">
+                    <span class="dot"></span> EN VIVO
+                </div>
+                <div class="title">Tiempo TV</div>
+            </div>
+
+            <div class="bottom-bar">
+                <button class="btn" id="playPauseBtn" tabindex="0">
+                    <svg id="playIcon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    <span id="playText">Reproducir</span>
+                </button>
+                <button class="btn" id="reloadBtn" tabindex="0">
+                    <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-8 3.58-8 8s3.58 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+                    Recargar
+                </button>
+                <button class="btn" id="fsBtn" tabindex="0">
+                    <svg id="fsIcon" viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+                    Pantalla Completa
+                </button>
+            </div>
+        </div>
+
+        <!-- Mensaje de error -->
+        <div id="error">
+            ⚠️ No se pudo cargar la transmisión.<br>
+            <span style="font-size:18px; color:#ffcccc;">Presiona "Recargar" para intentar de nuevo.</span>
+        </div>
+    </div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            const STREAM_URL = 'https://stmvideo1.livecastv.com/tiempo/tiempo/playlist.m3u8';
+
+            const video       = document.getElementById('video');
+            const loading     = document.getElementById('loading');
+            const controls    = document.getElementById('controls');
+            const errorBox    = document.getElementById('error');
+            const playPauseBtn = document.getElementById('playPauseBtn');
+            const playText    = document.getElementById('playText');
+            const playIcon    = document.getElementById('playIcon');
+            const reloadBtn   = document.getElementById('reloadBtn');
+            const fsBtn       = document.getElementById('fsBtn');
+            const fsIcon      = document.getElementById('fsIcon');
+
+            let hls = null;
+            let hideTimer = null;
+            let playing = false;
+
+            // ---------- Inicialización HLS ----------
+            function initPlayer() {
+                loading.classList.remove('hidden');
+                errorBox.classList.remove('visible');
+
+                // Limpiar instancia previa
+                if (hls) {
+                    try { hls.destroy(); } catch (e) {}
+                    hls = null;
+                }
+
+                if (window.Hls && Hls.isSupported()) {
+                    hls = new Hls({
+                        enableWorker: true,
+                        lowLatencyMode: true,
+                        backBufferLength: 30,
+                        maxBufferLength: 30,
+                        manifestLoadingTimeOut: 15000,
+                        manifestLoadingMaxRetry: 3,
+                        fragLoadingTimeOut: 20000
+                    });
+
+                    hls.loadSource(STREAM_URL);
+                    hls.attachMedia(video);
+
+                    hls.on(Hls.Events.MANIFEST_PARSED, function () {
+                        tryPlay();
+                    });
+
+                    hls.on(Hls.Events.ERROR, function (event, data) {
+                        if (data.fatal) {
+                            switch (data.type) {
+                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                    console.warn('Error de red, reintentando...');
+                                    hls.startLoad();
+                                    break;
+                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                    console.warn('Error de media, recuperando...');
+                                    hls.recoverMediaError();
+                                    break;
+                                default:
+                                    showError();
+                                    break;
+                            }
+                        }
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    // Soporte nativo HLS (Safari, algunos Smart TV)
+                    video.src = STREAM_URL;
+                    tryPlay();
+                } else {
+                    showError();
+                }
+            }
+
+            function tryPlay() {
+                const p = video.play();
+                if (p && p.catch) {
+                    p.catch(function () {
+                        // Autoplay bloqueado: esperar interacción
+                        showControls();
+                        updatePlayState(false);
+                    });
+                }
+            }
+
+            function showError() {
+                loading.classList.add('hidden');
+                errorBox.classList.add('visible');
+            }
+
+            // ---------- Eventos de video ----------
+            video.addEventListener('playing', function () {
+                loading.classList.add('hidden');
+                errorBox.classList.remove('visible');
+                updatePlayState(true);
+                scheduleHideControls();
+            });
+
+            video.addEventListener('pause', function () {
+                updatePlayState(false);
+                showControls();
+            });
+
+            video.addEventListener('waiting', function () {
+                loading.classList.remove('hidden');
+            });
+
+            video.addEventListener('canplay', function () {
+                loading.classList.add('hidden');
+            });
+
+            video.addEventListener('error', function () {
+                showError();
+            });
+
+            // ---------- Controles ----------
+            function updatePlayState(isPlaying) {
+                playing = isPlaying;
+                if (isPlaying) {
+                    playIcon.innerHTML = '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+                    playText.textContent = 'Pausa';
+                } else {
+                    playIcon.innerHTML = '<path d="M8 5v14l11-7z"/>';
+                    playText.textContent = 'Reproducir';
+                }
+            }
+
+            function togglePlay() {
+                if (video.paused) {
+                    video.play().catch(function(){});
+                } else {
+                    video.pause();
+                }
+            }
+
+            playPauseBtn.addEventListener('click', togglePlay);
+
+            reloadBtn.addEventListener('click', function () {
+                initPlayer();
+            });
+
+            fsBtn.addEventListener('click', toggleFullscreen);
+
+            function toggleFullscreen() {
+                const doc = document;
+                const el = document.documentElement;
+
+                if (!doc.fullscreenElement && !doc.webkitFullscreenElement) {
+                    if (el.requestFullscreen) {
+                        el.requestFullscreen();
+                    } else if (el.webkitRequestFullscreen) {
+                        el.webkitRequestFullscreen();
+                    } else if (video.webkitEnterFullscreen) {
+                        video.webkitEnterFullscreen(); // iOS
+                    }
+                } else {
+                    if (doc.exitFullscreen) {
+                        doc.exitFullscreen();
+                    } else if (doc.webkitExitFullscreen) {
+                        doc.webkitExitFullscreen();
+                    }
+                }
+            }
+
+            function updateFsIcon() {
+                const isFs = document.fullscreenElement || document.webkitFullscreenElement;
+                if (isFs) {
+                    fsIcon.innerHTML = '<path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>';
+                } else {
+                    fsIcon.innerHTML = '<path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>';
+                }
+            }
+
+            document.addEventListener('fullscreenchange', updateFsIcon);
+            document.addEventListener('webkitfullscreenchange', updateFsIcon);
+
+            // ---------- Mostrar/ocultar controles ----------
+            function showControls() {
+                controls.classList.add('visible');
+                scheduleHideControls();
+            }
+
+            function scheduleHideControls() {
+                if (hideTimer) clearTimeout(hideTimer);
+                if (!video.paused) {
+                    hideTimer = setTimeout(function () {
+                        controls.classList.remove('visible');
+                    }, 4000);
+                }
+            }
+
+            // Mostrar controles al mover el mouse o tocar
+            document.addEventListener('mousemove', showControls);
+            document.addEventListener('touchstart', showControls);
+            document.addEventListener('keydown', function (e) {
+                showControls();
+                handleKey(e);
+            });
+
+            function handleKey(e) {
+                switch (e.keyCode) {
+                    case 32:      // Espacio
+                    case 13:      // Enter
+                    case 415:     // Play (Samsung)
+                    case 19:      // Pause (Samsung)
+                        if (document.activeElement === document.body ||
+                            document.activeElement === video) {
+                            e.preventDefault();
+                            togglePlay();
+                        }
+                        break;
+                    case 179:     // Play/Pause tecla multimedia
+                        e.preventDefault();
+                        togglePlay();
+                        break;
+                    case 461:     // Back (LG/Samsung)
+                    case 8:       // Backspace
+                        if (document.fullscreenElement) {
+                            document.exitFullscreen();
+                        }
+                        break;
+                }
+            }
+
+            // ---------- Iniciar ----------
+            initPlayer();
+            updateFsIcon();
+
+            // Pausar cuando la app pierde foco (buena práctica en TV)
+            document.addEventListener('visibilitychange', function () {
+                if (document.hidden) {
+                    video.pause();
+                }
+            });
+        })();
+    </script>
+</body>
+</html>
